@@ -9,6 +9,8 @@ description: >
 
 本技能引導使用者將網頁應用程式或後端 API 部署到 Google Cloud Run，全程自動化，不需要 Docker 或 GCP 知識。
 
+對外 URL 接線（path-based routing 到 ailab LB）由獨立 skill 處理，本 skill 只負責 Cloud Run 本身。
+
 ## 預設值
 
 | 項目 | 預設值 |
@@ -18,6 +20,8 @@ description: >
 | 服務名稱 (測試) | `{資料夾名}-dev` |
 | 服務名稱 (正式) | `{資料夾名}-prod` |
 | 認證方式 | Google Group（使用者個人帳號） |
+| VPC egress 出口 IP | dev / prod 各一條固定 IP（由 Cloud NAT 自動配發） |
+| 對外 URL（候選） | `https://ailab-{env}.cmoney.tw/{APP}/` ※需 platform 加 LB path rule 才生效 |
 | Swagger 路徑 | `/swagger` |
 
 ---
@@ -166,8 +170,13 @@ gcloud run deploy {name}-{dev|prod} \
   --source {path} \
   --project ailab-494105 \
   --region asia-east1 \
-  --allow-unauthenticated
+  --allow-unauthenticated \
+  --network=default \
+  --subnet=ailab-asia-east1-{dev|prod} \
+  --vpc-egress=all-traffic
 ```
+
+`--network` / `--subnet` / `--vpc-egress` 三個 flag 把服務的對外流量導到 Cloud NAT 固定 IP，後端白名單服務（如 xlab GKE pgbouncer）才認得。
 
 ### 有環境變數時
 
@@ -179,8 +188,13 @@ gcloud run deploy {name}-{env} \
   --project ailab-494105 \
   --region asia-east1 \
   --allow-unauthenticated \
+  --network=default \
+  --subnet=ailab-asia-east1-{env} \
+  --vpc-egress=all-traffic \
   --set-env-vars "KEY1=value1,KEY2=value2"
 ```
+
+部署成功後取得 `{cloudRunUrl}`（`status.url`）。
 
 ---
 
@@ -189,15 +203,30 @@ gcloud run deploy {name}-{env} \
 ### 部署成功
 
 **網頁專案：**
-- 回傳 Service URL：
-  > 部署成功！你的網頁已上線：
-  > {Service URL}
+
+> 部署成功！你的網頁已上線：
+>
+> 📌 直連 URL（部署立即可用）：{cloudRunUrl}
+>
+> 🌐 對外 URL（候選）：https://ailab-{env}.cmoney.tw/{APP}/
+>    ⚠️ 上面這個對外 URL **預設不會** 在部署完成當下生效，需要 platform admin
+>    把 `/{APP}/` path rule 加進 ailab LB 的 URL map（一次性設定）。
+>    要啟用對外 URL，請聯繫 kevin_kuo@cmoney.com.tw。
 
 **後端 API 專案：**
-- 回傳 Service URL 和 Swagger 文件連結：
-  > 部署成功！你的 API 已上線：
-  > - API 位址：{Service URL}
-  > - API 文件：{Service URL}/swagger
+
+> 部署成功！你的 API 已上線：
+>
+> 📌 直連 URL（部署立即可用）：
+>    - API 位址：{cloudRunUrl}
+>    - API 文件：{cloudRunUrl}/swagger
+>
+> 🌐 對外 URL（候選）：
+>    - API 位址：https://ailab-{env}.cmoney.tw/{APP}/
+>    - API 文件：https://ailab-{env}.cmoney.tw/{APP}/swagger
+>    ⚠️ 上面這兩個對外 URL **預設不會** 在部署完成當下生效，需要 platform admin
+>    把 `/{APP}/` path rule 加進 ailab LB 的 URL map（一次性設定）。
+>    要啟用對外 URL，請聯繫 kevin_kuo@cmoney.com.tw。
 
 ### 部署失敗
 
