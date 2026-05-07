@@ -23,10 +23,10 @@ subdomain 模式仍需 IT 一次性設定，詳見 Step 5 Case B。
 | 認證方式 | Google Group（使用者個人帳號） |
 | VPC egress 出口 IP | dev / prod 各一條固定 IP（由 Cloud NAT 自動配發） |
 | 對外 URL（sub-path）| `https://ailab-{env}.cmoney.tw/{APP}/`（部署完 skill 自動接 LB，不需找 platform admin） |
-| URL Router Helper | `https://url-router-helper-557076811903.asia-east1.run.app`（內部 service，SM key 認證） |
+| URL Router Helper | `https://ailab-{env}.cmoney.tw/url-router`（內部 service，dev/prod 各自獨立） |
 | Swagger / API 文件路徑 | 因框架而異：.NET / NestJS = `/swagger`；FastAPI = `/docs`；Flask-RESTX = `/`；其他請依框架預設 |
 
-> **維運備註（給 platform admin 看）**：上方 helper URL 是 SoT。Step 4.5 / Step 5 內的指令模板雖然各自寫死同一個 URL，但若 helper 重新部署造成 URL 變動，請改本表格 + 同步更新 Step 4.5-3 與 Step 5 Case A2 的 `HELPER_URL=...` 字串，然後跑 `cm-ailab-mp:update` 重發 skill。
+> **維運備註（給 platform admin 看）**：上方 helper URL 是 SoT，綁在 LB 子路徑、不會因重新部署變動。每個 env 用獨立 SM key（`url-router-key-{env}`）。若 URL 變動，改本表格 + Step 4.5-3 與 Step 5 Case A2 的 `HELPER_URL=...`，然後跑 `cm-ailab-mp:update` 重發 skill。
 
 ---
 
@@ -77,16 +77,17 @@ gcloud auth list --filter="status:ACTIVE" --format="value(account)"
 gcloud run services list --project=ailab-494105 --region=asia-east1 --limit=1 2>&1
 # Cloud Build editor 權限（--source 部署用 Cloud Build）
 gcloud builds list --project=ailab-494105 --region=asia-east1 --limit=1 2>&1
-# Secret Manager 讀取權限（Step 4.5 自動接 URL 會用到）
-gcloud secrets versions access latest --secret=url-router-key --project=ailab-494105 >/dev/null 2>&1
+# Secret Manager 讀取權限（Step 4.5 自動接 URL 會用到）— dev 和 prod key 各檢一次
+gcloud secrets versions access latest --secret=url-router-key-dev --project=ailab-494105 >/dev/null 2>&1
+gcloud secrets versions access latest --secret=url-router-key-prod --project=ailab-494105 >/dev/null 2>&1
 ```
 
 Cloud Run 或 Cloud Build 任一出現 `PERMISSION_DENIED`，中斷流程：
 
 > 你的帳號目前沒有 [Cloud Run / Cloud Build] 部署權限。請聯繫 kevin_kuo@cmoney.com.tw 開通。
 
-如果只有 Secret Manager 那條失敗（PM 沒在 `ai_lab@cmoney.com.tw` group 或 secret 不存在）：
-> 你拿不到 url-router-key（沒在 ai_lab group 或 secret 暫時不可讀）。
+如果 Secret Manager 拿不到（PM 沒在 `ai_lab@cmoney.com.tw` group 或 secret 不存在）：
+> 你拿不到 url-router 的 SM key（沒在 ai_lab group 或 secret 暫時不可讀）。
 > 部署本身還能跑，但 Step 4.5（自動接 URL）會跳過，部署完要手動聯繫 kevin_kuo@cmoney.com.tw 接 URL。
 > 要繼續嗎？(Y/n)
 
@@ -479,7 +480,7 @@ gcloud run deploy {APP}-{env} \
 **前置條件**：本步驟**只在以下情境執行**：
 - env=dev（永遠 sub-path）
 - env=prod 且模式=sub-path
-- Step 1-3 Secret Manager 檢查通過（PM 拿得到 `url-router-key`）
+- Step 1-3 Secret Manager 檢查通過（PM 拿得到 url-router 的 SM key）
 
 **跳過整個 Step 4.5、直接進 Step 5 的情境**（任一即跳過）：
 - PM 在 Step 2-5 選了「純內部」（不對外）→ Step 5 走 Case C
@@ -511,15 +512,15 @@ gcloud run deploy {APP}-{env} \
 然後執行：
 
 ```bash
-KEY=$(gcloud secrets versions access latest --secret=url-router-key --project=ailab-494105)
+KEY=$(gcloud secrets versions access latest --secret=url-router-key-{env} --project=ailab-494105)
 EMAIL=$(gcloud config get-value account 2>/dev/null)
-HELPER_URL=https://url-router-helper-557076811903.asia-east1.run.app
+HELPER_URL=https://ailab-{env}.cmoney.tw/url-router
 
 curl -s --max-time 360 -X POST "$HELPER_URL/bind" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $KEY" \
   -H "X-User-Email: $EMAIL" \
-  -d '{"app":"{APP}","env":"{env}","path":"/{path}","cloud_run_service":"{APP}-{env}"}'
+  -d '{"app":"{APP}","path":"/{path}","cloud_run_service":"{APP}-{env}"}'
 ```
 
 如果 `gcloud secrets versions access` 失敗，依錯誤分流：
@@ -527,7 +528,7 @@ curl -s --max-time 360 -X POST "$HELPER_URL/bind" \
 - `PERMISSION_DENIED` / `403`：你還沒被加進 `ai_lab@cmoney.com.tw` group。
   → 告訴 PM：請聯繫 kevin_kuo@cmoney.com.tw 把你加進去。
 - `NOT_FOUND` 或「Secret [...] not found」：secret 版本被停用或刪除。
-  → 告訴 PM：先聯繫 kevin_kuo 確認 `url-router-key` 狀態。
+  → 告訴 PM：先聯繫 kevin_kuo 確認 url-router 的 SM key 狀態。
 - 其他：把原始錯誤訊息給 PM 看。
 
 不論哪種 → 給選項「先跳過 Step 4.5，後續手動處理」。
@@ -597,10 +598,11 @@ curl -s --max-time 360 -X POST "$HELPER_URL/bind" \
 > 🌐 想接到 https://ailab-{env}.cmoney.tw/{path}/ 的話，**有兩個選項：**
 >    1. 之後再執行 `/ailab-cloudrun-deploy` 重跑、或叫 url-router-helper：
 >       ```
->       KEY=$(gcloud secrets versions access latest --secret=url-router-key --project=ailab-494105)
->       curl -X POST https://url-router-helper-557076811903.asia-east1.run.app/bind \
+>       KEY=$(gcloud secrets versions access latest --secret=url-router-key-{env} --project=ailab-494105)
+>       HELPER_URL=https://ailab-{env}.cmoney.tw/url-router
+>       curl -X POST "$HELPER_URL/bind" \
 >         -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
->         -d '{"app":"{APP}","env":"{env}","path":"/{path}","cloud_run_service":"{APP}-{env}"}'
+>         -d '{"app":"{APP}","path":"/{path}","cloud_run_service":"{APP}-{env}"}'
 >       ```
 >    2. 把以下資訊傳給 kevin_kuo@cmoney.com.tw：APP={APP}, env={env}, 模式=sub-path, Cloud Run service={APP}-{env}
 
